@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FPL Squad Planner - Squad Builder</title>
+    <link rel="stylesheet" href="app.css">
+</head>
+<body>
+    <!-- Team ID Modal -->
+    <div class="modal" id="teamIdModal">
+        <div class="modal-content">
+            <h2>Enter Your FPL Team ID</h2>
+            <p>You can find your team ID in the URL when viewing your team on the official FPL website.<br>
+            Example: fantasy.premierleague.com/entry/<strong>123456</strong>/event/1</p>
+            <input type="number" id="teamIdInput" placeholder="Enter your team ID (e.g. 123456)" />
+            <div style="margin-top: 20px;">
+                <button class="btn" onclick="loadUserTeam()">Load My Team</button>
+                <button class="btn btn-secondary" onclick="skipTeamLoad()">Skip (Use Demo)</button>
+            </div>
+            <div id="loadingMessage" style="display: none; margin-top: 15px; color: #666;">
+                Loading your team data...
+            </div>
+        </div>
+    </div>
+
+    <header class="header">
+    <div class="header-content">
+        <div class="logo">
+            <img src="PLbadges/Premier-League-Logo.png" alt="Premier League" class="header-logo">
+            FPL Squad Planner
+        </div>
+        <nav class="nav-tabs">
+            <button class="nav-tab" data-page="fixtures">Fixtures</button>
+            <button class="nav-tab active" data-page="team">Squad Builder</button>
+        </nav>
+    </div>
+</header>
+
+    <div class="container">
+        <!-- Team Info Header -->
+        <div class="team-info-header" id="teamInfoHeader" style="display: none;">
+            <div class="team-info-item">
+                <div class="team-info-value" id="managerName">-</div>
+                <div class="team-info-label">Manager</div>
+            </div>
+            <div class="team-info-item">
+                <div class="team-info-value" id="teamName">-</div>
+                <div class="team-info-label">Team Name</div>
+            </div>
+            <div class="team-info-item">
+                <div class="team-info-value" id="overallRank">-</div>
+                <div class="team-info-label">Overall Rank</div>
+            </div>
+            <div class="team-info-item">
+                <div class="team-info-value" id="totalPoints">-</div>
+                <div class="team-info-label">Total Points</div>
+            </div>
+            <div class="team-info-item">
+                <div class="team-info-value" id="gameweekRank">-</div>
+                <div class="team-info-label">GW Rank</div>
+            </div>
+        </div>
+
+        <!-- Team Planner Page -->
+        <div class="page active" id="team">
+            <div class="squad-builder-container">
+                <!-- Team Section -->
+                <div class="squad-section">
+                    <div class="squad-header">
+                        <h2 class="squad-title">My Team</h2>
+                        <div class="squad-info">
+                            <span id="playerCount">0/15 Players</span>
+                            <span id="totalCost">£0.0m spent</span>
+                            <span id="remaining">£0.0m available</span>
+                            <span id="teamValue">£0.0m team value</span>
+                        </div>
+
+                        <!-- Gameweek controls -->
+                        <div class="gw-controls" id="gwControls">
+                            <button id="gwPrev" title="Previous Gameweek">◀</button>
+                            <span id="currentGW">Gameweek -</span>
+                            <button id="gwNext" title="Next Gameweek">▶</button>
+                        </div>
+
+                        <div class="formation-selector">
+                            <label>Formation:</label>
+                            <select id="formationSelect">
+                                <option value="442">4-4-2</option>
+                                <option value="433">4-3-3</option>
+                                <option value="343">3-4-3</option>
+                                <option value="352">3-5-2</option>
+                                <option value="541">5-4-1</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="pitch" id="pitch">
+                        <div class="formation-line goalkeeper">
+                            <div class="player-slot" data-pos="GK" data-slot="0" data-slot-type="starting">
+                                <div class="player-name">GK</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="formation-line defenders">
+                            <div class="player-slot" data-pos="DEF" data-slot="1" data-slot-type="starting">
+                                <div class="player-name">DEF</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                            <div class="player-slot" data-pos="DEF" data-slot="2" data-slot-type="starting">
+                                <div class="player-name">DEF</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                            <div class="player-slot" data-pos="DEF" data-slot="3" data-slot-type="starting">
+                                <div class="player-name">DEF</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                            <div class="player-slot" data-pos="DEF" data-slot="4" data-slot-type="starting">
+                                <div class="player-name">DEF</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                            <div class="player-slot" data-pos="DEF" data-slot="5" data-slot-type="starting" style="display: none;">
+                                <div class="player-name">DEF</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="formation-line midfielders">
+                            <div class="player-slot" data-pos="MID" data-slot="6" data-slot-type="starting">
+                                <div class="player-name">MID</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                            <div class="player-slot" data-pos="MID" data-slot="7" data-slot-type="starting">
+                                <div class="player-name">MID</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                            <div class="player-slot" data-pos="MID" data-slot="8" data-slot-type="starting">
+                                <div class="player-name">MID</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                            <div class="player-slot" data-pos="MID" data-slot="9" data-slot-type="starting">
+                                <div class="player-name">MID</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                            <div class="player-slot" data-pos="MID" data-slot="10" data-slot-type="starting" style="display: none;">
+                                <div class="player-name">MID</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="formation-line forwards">
+                            <div class="player-slot" data-pos="FWD" data-slot="11" data-slot-type="starting">
+                                <div class="player-name">FWD</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                            <div class="player-slot" data-pos="FWD" data-slot="12" data-slot-type="starting">
+                                <div class="player-name">FWD</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                            <div class="player-slot" data-pos="FWD" data-slot="13" data-slot-type="starting" style="display: none;">
+                                <div class="player-name">FWD</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="bench-section">
+                        <h3 class="bench-title">Substitutes</h3>
+                        <div class="bench-slots">
+                            <div class="player-slot" data-pos="GK" data-slot="14" data-slot-type="bench">
+                                <div class="player-name">GK</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                            <div class="player-slot" data-pos="ANY" data-slot="15" data-slot-type="bench">
+                                <div class="player-name">SUB</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                            <div class="player-slot" data-pos="ANY" data-slot="16" data-slot-type="bench">
+                                <div class="player-name">SUB</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                            <div class="player-slot" data-pos="ANY" data-slot="17" data-slot-type="bench">
+                                <div class="player-name">SUB</div>
+                                <div class="player-fixture"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Side Panel -->
+                <div class="side-panel">
+    <h3>Resources</h3>
+    
+    <div class="resource-section">
+              <h4>Price Changes</h4>
+                <a href="https://www.livefpl.net/prices" target="_blank" class="resource-link">LiveFPL →</a>
+                </div>
+    
+                <div class="resource-section">
+                 <h4>Advanced Stats</h4>
+                  <a href="https://fbref.com/en/comps/9/Premier-League-Stats" target="_blank" class="resource-link">FBref Statistics →</a>
+                  </div>
+                     </div>
+                <!-- Player Explorer Section -->
+                <div class="player-explorer-section">
+                    <h2 style="margin-bottom: 20px; color: var(--pl-purple);">Add Players</h2>
+                    <div class="filters">
+                        <div class="filter-row">
+                            <div class="filter-group">
+                                <label>Position</label>
+                                <select id="positionFilter">
+                                    <option value="">All Positions</option>
+                                    <option value="GK">Goalkeeper</option>
+                                    <option value="DEF">Defender</option>
+                                    <option value="MID">Midfielder</option>
+                                    <option value="FWD">Forward</option>
+                                </select>
+                            </div>
+                            <div class="filter-group">
+                                <label>Team</label>
+                                <select id="teamFilter">
+                                    <option value="">All Teams</option>
+                                </select>
+                            </div>
+                            <div class="filter-group price-filter">
+                                <label>Max Price</label>
+                                <div class="price-slider-container">
+                                    <input type="range" id="priceFilter" min="3.5" max="15.0" step="0.1" value="15.0">
+                                    <span id="priceValue">£15.0m</span>
+                                </div>
+                            </div>
+                            <div class="filter-group search-box">
+                                <label>Search Player</label>
+                                <input type="text" id="searchFilter" placeholder="Enter player name...">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stats-table">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th data-sort="name">Player</th>
+                                    <th data-sort="team">Team</th>
+                                    <th data-sort="position">Pos</th>
+                                    <th data-sort="price">Price</th>
+                                    <th data-sort="points">Points</th>
+                                    <th data-sort="goals">Goals</th>
+                                    <th data-sort="assists">Assists</th>
+                                    <th data-sort="ppg">PPG</th>
+                                    <th data-sort="form">Form</th>
+                                    <th data-sort="ownership">Own%</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="playersTableBody">
+                                <tr>
+                                    <td colspan="11" class="loading">Loading players...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            
+            <div style="text-align: center; margin-top: 20px;">
+                <button class="btn" onclick="clearTeam()" style="margin-right: 10px;">Clear Team</button>
+                <button class="btn btn-secondary" onclick="autoFill()">Auto Fill</button>
+                <button class="btn btn-secondary" onclick="showTeamIdModal()">Load Different Team</button>
+            </div>
+        </div>
+
+        <!-- Fixtures Page -->
+        <div class="page" id="fixtures">
+            <h2 style="margin-bottom: 20px; color: var(--pl-purple);">Fixture Difficulty Analysis</h2>
+            <div class="fixtures-grid" id="fixturesGrid">
+                <div class="loading">Loading fixtures...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
