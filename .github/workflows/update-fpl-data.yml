@@ -1,0 +1,42 @@
+name: Update FPL data
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # every hour
+  workflow_dispatch:       # lets you run it by hand from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download FPL data
+        run: |
+          mkdir -p data
+          UA="Mozilla/5.0 (FPL Squad Planner)"
+          curl -fsSL --retry 3 -A "$UA" https://fantasy.premierleague.com/api/bootstrap-static/ -o /tmp/bootstrap.json
+          curl -fsSL --retry 3 -A "$UA" https://fantasy.premierleague.com/api/fixtures/ -o /tmp/fixtures.json
+
+          # Keep only the fields the site uses, so the files stay small
+          jq -c '{
+            teams: [.teams[] | {id, name, short_name, code}],
+            events: [.events[] | {id, name, deadline_time, finished, is_current, is_next, is_previous}],
+            elements: [.elements[] | {id, first_name, second_name, team, element_type, now_cost, total_points,
+              goals_scored, assists, points_per_game, form, selected_by_percent, minutes, yellow_cards, red_cards,
+              bonus, clean_sheets, saves, penalties_saved, penalties_missed, influence, creativity, threat,
+              ict_index, status}]
+          }' /tmp/bootstrap.json > data/bootstrap-static.json
+
+          jq -c '[.[] | {id, event, finished, team_h, team_a, team_h_difficulty, team_a_difficulty, kickoff_time}]' \
+            /tmp/fixtures.json > data/fixtures.json
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          git diff --cached --quiet || (git commit -m "Update FPL data" && git push)
