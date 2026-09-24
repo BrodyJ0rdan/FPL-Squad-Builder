@@ -5,18 +5,88 @@ const FIXTURES = `${FPL_API_BASE}/fixtures/`;
 const TEAM_ENTRY = (teamId) => `${FPL_API_BASE}/entry/${teamId}/`;
 const TEAM_PICKS = (teamId, gw) => `${FPL_API_BASE}/entry/${teamId}/event/${gw}/picks/`;
 
-// Team badge mapping
+// CORS routes to try in order (the FPL API doesn't send CORS headers itself)
+// Opened by double-clicking index.html? The browser then reports its origin as "null"
+// and third-party proxies refuse it. Use `node server.js` and http://localhost:3000 instead.
+const IS_FILE = location.protocol === 'file:';
+const IS_LOCALHOST = ['localhost', '127.0.0.1'].includes(location.hostname);
+const IS_GITHUB_PAGES = location.hostname.endsWith('github.io');
+
+// Optional: paste your Cloudflare Worker address here (see cloudflare-worker.js), e.g.
+// 'https://fpl-proxy.yourname.workers.dev'. It is only needed for "Load My Team" by ID.
+const WORKER_URL = '';
+
+// On GitHub Pages the main data is downloaded into /data by the GitHub Action
+// (.github/workflows/update-fpl-data.yml), so the browser reads it from the same site.
+const LOCAL_DATA = {
+    [BOOTSTRAP_STATIC]: 'data/bootstrap-static.json',
+    [FIXTURES]: 'data/fixtures.json'
+};
+const USE_STATIC_DATA = !IS_FILE && !IS_LOCALHOST;
+
+const PROXIES = [
+    ...(WORKER_URL ? [u => WORKER_URL.replace(/\/$/, '') + u.replace(FPL_API_BASE, '/api')] : []),
+    ...(IS_FILE || IS_GITHUB_PAGES ? [] : [u => u.replace(FPL_API_BASE, '/api')]), // server.js / same-origin proxy
+    u => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+    u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+    u => u // direct, in case CORS is allowed
+];
+let workingProxy = 0;
+let proxyConfirmed = false; // true once any route has returned data successfully
+const FETCH_TIMEOUT_MS = 15000;
+
+// Fetch JSON from the FPL API, falling back through the proxies (each with a timeout)
+// and remembering the one that works
+async function fplFetch(url) {
+    // Hosted online (e.g. GitHub Pages): use the data files the GitHub Action keeps up to date
+    if (USE_STATIC_DATA && LOCAL_DATA[url]) {
+        try {
+            const res = await fetch(`${LOCAL_DATA[url]}?t=${Math.floor(Date.now() / 60000)}`);
+            if (res.ok) return await res.json();
+        } catch (e) {
+            console.warn('Static data file unavailable, trying live routes:', e.message);
+        }
+    }
+
+    let lastErr;
+    for (let i = 0; i < PROXIES.length; i++) {
+        const idx = (workingProxy + i) % PROXIES.length;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+        try {
+            const res = await fetch(PROXIES[idx](url), { signal: controller.signal });
+            if (res.status === 404 && proxyConfirmed) throw Object.assign(new Error('Not found (404)'), { fatal: true });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            workingProxy = idx;
+            proxyConfirmed = true;
+            return data;
+        } catch (e) {
+            if (e.fatal) throw e;
+            console.warn(`Proxy ${idx} failed:`, e.message);
+            lastErr = e;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+    throw lastErr || new Error('All proxies failed');
+}
+
+// Team badge mapping (2026/27 Premier League)
 const TEAM_BADGES = {
     'ARS': 'PLbadges/Arsenal-Logo.png',
     'AVL': 'PLbadges/AstonVilla-Logo.png',
     'BOU': 'PLbadges/Bournmouth-Logo.png',
     'BRE': 'PLbadges/Brentford-Logo.png',
     'BHA': 'PLbadges/Brighton-Logo.png',
-    'BUR': 'PLbadges/Burnley-Logo.png',
     'CHE': 'PLbadges/Chelsea-Logo.png',
+    'COV': 'PLbadges/CoventryCity-Logo.png',
     'CRY': 'PLbadges/CrystalPalace-Logo.png',
     'EVE': 'PLbadges/Everton-Logo.png',
     'FUL': 'PLbadges/Fulham-Logo.png',
+    'HUL': 'PLbadges/HullCity-Logo.png',
+    'IPS': 'PLbadges/IpswitchTown-Logo.png',
     'LEE': 'PLbadges/Leeds-Logo.png',
     'LIV': 'PLbadges/Liverpool-Logo.png',
     'MCI': 'PLbadges/ManchesterCity-Logo.png',
@@ -24,10 +94,16 @@ const TEAM_BADGES = {
     'NEW': 'PLbadges/NewcastleUnited-Logo.png',
     'NFO': 'PLbadges/NottinghamForest-Logo.png',
     'SUN': 'PLbadges/Sunderland-Logo.png',
-    'TOT': 'PLbadges/TottenhamHotspur-Logo.png',
-    'WHU': 'PLbadges/WestHam-Logo.png',
-    'WOL': 'PLbadges/Wolves-Logo.png'
+    'TOT': 'PLbadges/TottenhamHotspur-Logo.png'
 };
+
+// Local badge if we have one, otherwise the official badge via the team code from the API
+function badgeSrc(shortName) {
+    if (TEAM_BADGES[shortName]) return TEAM_BADGES[shortName];
+    const t = allTeams.find(t => t.short_name === shortName);
+    return t ? `https://resources.premierleague.com/premierleague/badges/70/t${t.code}.png`
+             : 'PLbadges/default.png';
+}
 
 // Global data storage
 let allPlayers = [];
@@ -51,15 +127,20 @@ let viewedGW = null;
 let selectedSlotEl = null;
 
 // Initialize app on load
-document.addEventListener('DOMContentLoaded', async () => {
-    await loadFPLData();
+let dataReady = null; // resolves when the FPL data has finished loading
+
+document.addEventListener('DOMContentLoaded', () => {
+    // Set the page up straight away so buttons and the modal work even while data loads
     initializeEventListeners();
     initializeGWControls();
-    displayPlayers();
-    displayFixtures();
-    
-    // Show team ID modal on first load
     showTeamIdModal();
+
+    dataReady = loadFPLData().then(() => {
+        displayPlayers();
+        displayFixtures();
+        updateGWDisplay();
+        updateTeamDisplay();
+    });
 });
 
 // Show team ID modal
@@ -96,28 +177,22 @@ async function loadUserTeam() {
     if (loadingMsg) loadingMsg.style.display = 'block';
     
     try {
-        const proxyUrl = 'https://corsproxy.io/?';
-        
-        // Get team general info
-        const teamResponse = await fetch(proxyUrl + encodeURIComponent(TEAM_ENTRY(teamId)));
-        if (!teamResponse.ok) {
-            throw new Error('Team not found or API error');
+        // Player data must be loaded before a team can be built from it
+        if (dataReady) await dataReady;
+        if (!allPlayers.length) {
+            throw new Error('Player data has not loaded yet - check your connection and refresh the page.');
         }
-        userTeamData = await teamResponse.json();
-        console.log('User team data loaded:', userTeamData);
+
+        // Get team general info
+        userTeamData = await fplFetch(TEAM_ENTRY(teamId));
         
         // Store the initial bank balance
         initialBankBalance = userTeamData.last_deadline_bank / 10;
-        console.log('Initial bank balance:', initialBankBalance);
         
-        // Get current team picks - try to get the most recent completed gameweek
+        // Get current team picks - try the most recent gameweek first, then work backwards
         let picksLoaded = false;
-        
-        // First, try to get the current event (upcoming GW)
         const currentEvent = userTeamData.current_event;
-        console.log('Current event from team data:', currentEvent);
         
-        // Try the current event first, then work backwards
         const gameweeksToTry = [];
         if (currentEvent) {
             gameweeksToTry.push(currentEvent);
@@ -131,22 +206,13 @@ async function loadUserTeam() {
             }
         }
         
-        console.log('Trying gameweeks:', gameweeksToTry, 'to find current team');
-        
         for (const gw of gameweeksToTry) {
             try {
-                console.log(`Trying to load picks for GW ${gw}`);
-                const picksResponse = await fetch(proxyUrl + encodeURIComponent(TEAM_PICKS(teamId, gw)));
-                if (picksResponse.ok) {
-                    const picksData = await picksResponse.json();
-                    if (picksData.picks && picksData.picks.length > 0) {
-                        userTeamPicks = picksData.picks;
-                        console.log(`Successfully loaded current team from GW ${gw}:`, userTeamPicks);
-                        picksLoaded = true;
-                        break;
-                    }
-                } else {
-                    console.log(`GW ${gw} returned ${picksResponse.status}`);
+                const picksData = await fplFetch(TEAM_PICKS(teamId, gw));
+                if (picksData.picks && picksData.picks.length > 0) {
+                    userTeamPicks = picksData.picks;
+                    picksLoaded = true;
+                    break;
                 }
             } catch (e) {
                 console.log(`Failed to load GW ${gw}:`, e.message);
@@ -186,9 +252,6 @@ function setupUserTeam() {
         console.error('Missing userTeamPicks - loading team info without picks');
     }
     
-    console.log('Setting up user team data:', userTeamData);
-    console.log('Setting up user team picks:', userTeamPicks);
-    
     // Display team info
     const teamInfoHeader = document.getElementById('teamInfoHeader');
     if (teamInfoHeader) teamInfoHeader.style.display = 'flex';
@@ -210,7 +273,6 @@ function setupUserTeam() {
         
         // Sort picks by their position field to maintain FPL order
         const sortedPicks = userTeamPicks.slice().sort((a, b) => a.position - b.position);
-        console.log('Sorted picks:', sortedPicks);
         
         sortedPicks.forEach(pick => {
             const player = allPlayers.find(p => p.id === pick.element);
@@ -219,17 +281,11 @@ function setupUserTeam() {
                 
                 // Use the current market price for display
                 player.sellPrice = player.price;
-                
-                console.log(`${player.name}: Current value £${player.price.toFixed(1)}m`);
             } else {
                 console.error('Player not found for ID:', pick.element);
             }
         });
-        
-        console.log('Final baseTeam:', baseTeam);
-        console.log('Team loaded with', baseTeam.length, 'players');
     } else {
-        console.log('No picks available - showing team info only');
         baseTeam = [];
     }
     
@@ -244,9 +300,7 @@ function setupUserTeam() {
 // Fetch data from FPL API
 async function loadFPLData() {
     try {
-        const proxyUrl = 'https://corsproxy.io/?';
-        const response = await fetch(proxyUrl + encodeURIComponent(BOOTSTRAP_STATIC));
-        const data = await response.json();
+        const data = await fplFetch(BOOTSTRAP_STATIC);
 
         allTeams = data.teams;
         allPlayers = data.elements.map(player => ({
@@ -258,6 +312,7 @@ async function loadFPLData() {
             price: player.now_cost / 10,
             sellPrice: player.now_cost / 10,
             customPrice: null,
+            status: player.status, // 'u' = left the league
             points: player.total_points,
             goals: player.goals_scored,
             assists: player.assists,
@@ -278,25 +333,49 @@ async function loadFPLData() {
             ictIndex: player.ict_index
         }));
 
-        const fixturesResponse = await fetch(proxyUrl + encodeURIComponent(FIXTURES));
-        allFixtures = await fixturesResponse.json();
+        allFixtures = await fplFetch(FIXTURES);
 
-        // Compute upcomingGW and maxGW
-        const upcomingFixtures = allFixtures.filter(f => !f.finished && f.event);
-        if (upcomingFixtures.length > 0) upcomingGW = Math.min(...upcomingFixtures.map(f => f.event));
-        else upcomingGW = Math.min(...allFixtures.map(f => f.event || Infinity));
-        maxGW = Math.max(...allFixtures.map(f => f.event || 0));
+        // Work out the upcoming gameweek from the API's own event flags
+        // (a postponed old fixture can't pull this back to an earlier week)
+        const events = data.events || [];
+        const nextEv = events.find(e => e.is_next) || events.find(e => e.is_current) || events[events.length - 1];
+        upcomingGW = nextEv ? nextEv.id : Math.min(...allFixtures.map(f => f.event || Infinity));
+        maxGW = events.length
+            ? Math.max(...events.map(e => e.id))
+            : Math.max(...allFixtures.map(f => f.event || 0));
         viewedGW = upcomingGW;
 
         populateTeamFilter();
+        configurePriceSlider();
     } catch (error) {
         console.error('Error loading FPL data:', error);
         const tbody = document.getElementById('playersTableBody');
         if (tbody) {
             tbody.innerHTML =
-                '<tr><td colspan="11" style="text-align: center; color: red;">Error loading data. Please try refreshing the page.</td></tr>';
+                `<tr><td colspan="11" style="text-align: center; color: red;">` +
+                (IS_FILE
+                    ? 'This page was opened as a file, so the browser blocks the FPL data. ' +
+                      'Run <b>node server.js</b> in this folder, then open <b>http://localhost:3000</b>.'
+                    : IS_GITHUB_PAGES
+                    ? 'FPL data files not found yet. In your GitHub repo open <b>Actions → Update FPL data → Run workflow</b>, wait a minute, then refresh.'
+                    : `Error loading data (${error.message}). <a href="#" onclick="location.reload(); return false;">Retry</a>`) +
+                `</td></tr>`;
         }
     }
+}
+
+// Price slider range comes from the data instead of a hard-coded 3.5-15.0
+function configurePriceSlider() {
+    const slider = document.getElementById('priceFilter');
+    if (!slider || !allPlayers.length) return;
+    const prices = allPlayers.map(p => p.price);
+    const min = Math.floor(Math.min(...prices) * 10) / 10;
+    const max = Math.ceil(Math.max(...prices) * 10) / 10;
+    slider.min = min;
+    slider.max = max;
+    slider.value = max;
+    const label = document.getElementById('priceValue');
+    if (label) label.textContent = `£${max.toFixed(1)}m`;
 }
 
 function getPositionName(elementType) {
@@ -380,6 +459,8 @@ function displayPlayers() {
     const search = (document.getElementById('searchFilter')?.value || '').toLowerCase();
 
     let filteredPlayers = allPlayers.filter(player => {
+        // Hide players who have left the league (unless they're in the loaded team)
+        if (player.status === 'u' && !baseTeam.includes(player.id)) return false;
         if (position && player.position !== position) return false;
         if (team && player.team !== team) return false;
         if (!isNaN(maxPrice) && player.price > maxPrice) return false;
@@ -411,7 +492,7 @@ function displayPlayers() {
             <td class="player-name">${player.name}</td>
             <td>
                 <div class="team-badge-container">
-                    <img src="${TEAM_BADGES[player.team] || 'PLbadges/default.png'}" 
+                    <img src="${badgeSrc(player.team)}" 
                          alt="${player.team}" class="team-badge-img" 
                          onerror="this.src='PLbadges/default.png'">
                     ${player.team}
@@ -495,7 +576,8 @@ function displayFixtures() {
         teamFixtures[team.id] = { name: team.name, shortName: team.short_name, fixtures: [] };
     });
 
-    const upcomingFixtures = allFixtures.filter(f => !f.finished).sort((a, b) => a.event - b.event);
+    // Skip finished fixtures and unscheduled ones (postponed fixtures have event: null)
+    const upcomingFixtures = allFixtures.filter(f => !f.finished && f.event).sort((a, b) => a.event - b.event);
     upcomingFixtures.forEach(fixture => {
         const home = fixture.team_h;
         const away = fixture.team_a;
@@ -527,7 +609,7 @@ function displayFixtures() {
         const header = document.createElement('div');
         header.className = 'team-header';
         header.innerHTML = `
-            <img src="${TEAM_BADGES[team.shortName] || 'PLbadges/default.png'}" 
+            <img src="${badgeSrc(team.shortName)}" 
                  alt="${team.shortName}" class="team-badge-img"
                  onerror="this.src='PLbadges/default.png'">
             ${team.name}
@@ -709,7 +791,6 @@ function addToTeamForGW(playerId, gw) {
 
 function removeFromTeamForGW(playerId, gw) {
     const currentTeam = computeTeamForGW(gw);
-    const player = allPlayers.find(p => p.id === playerId);
     
     if (!currentTeam.some(p => p.id === playerId)) {
         alert('Player not in team for this gameweek.');
@@ -767,11 +848,14 @@ function autoFill() {
     swapOverrides = [];
     const budget = 100;
     const formation = { GK: 2, DEF: 5, MID: 5, FWD: 3 };
+    // Exclude players who have left the league
+    const available = allPlayers.filter(p => p.status !== 'u');
+    const byValue = (a, b) => (b.ppg / b.price) - (a.ppg / a.price);
     const playersByPosition = {
-        GK: allPlayers.filter(p => p.position === 'GK').sort((a, b) => (b.ppg / b.price) - (a.ppg / a.price)),
-        DEF: allPlayers.filter(p => p.position === 'DEF').sort((a, b) => (b.ppg / b.price) - (a.ppg / a.price)),
-        MID: allPlayers.filter(p => p.position === 'MID').sort((a, b) => (b.ppg / b.price) - (a.ppg / a.price)),
-        FWD: allPlayers.filter(p => p.position === 'FWD').sort((a, b) => (b.ppg / b.price) - (a.ppg / a.price))
+        GK: available.filter(p => p.position === 'GK').sort(byValue),
+        DEF: available.filter(p => p.position === 'DEF').sort(byValue),
+        MID: available.filter(p => p.position === 'MID').sort(byValue),
+        FWD: available.filter(p => p.position === 'FWD').sort(byValue)
     };
     let remainingBudget = budget;
     const teamCounts = {};
@@ -843,10 +927,6 @@ function performSwapBetweenSlots(slotAEl, slotBEl) {
 
 function updateTeamDisplay() {
     const teamForView = (viewedGW !== null) ? computeTeamForGW(viewedGW) : [];
-    
-    console.log('updateTeamDisplay - teamForView:', teamForView.length, 'players');
-    console.log('baseTeam:', baseTeam);
-    console.log('viewedGW:', viewedGW);
 
     if (selectedSlotEl && !document.body.contains(selectedSlotEl)) selectedSlotEl = null;
 
@@ -921,7 +1001,7 @@ function updateTeamDisplay() {
 
         slotEl.innerHTML = `
             <div class="player-team-badge">
-                <img src="${TEAM_BADGES[player.team] || 'PLbadges/default.png'}" 
+                <img src="${badgeSrc(player.team)}" 
                      alt="${player.team}" class="team-badge-img-small"
                      onerror="this.src='PLbadges/default.png'">
             </div>
