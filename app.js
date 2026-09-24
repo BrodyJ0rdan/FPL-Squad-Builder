@@ -14,7 +14,7 @@ const IS_GITHUB_PAGES = location.hostname.endsWith('github.io');
 
 // Optional: paste your Cloudflare Worker address here (see cloudflare-worker.js), e.g.
 // 'https://fpl-proxy.yourname.workers.dev'. It is only needed for "Load My Team" by ID.
-const WORKER_URL = '';
+const WORKER_URL = 'https://green-shadow-c3d2.brodyjordan10.workers.dev';
 
 // On GitHub Pages the main data is downloaded into /data by the GitHub Action
 // (.github/workflows/update-fpl-data.yml), so the browser reads it from the same site.
